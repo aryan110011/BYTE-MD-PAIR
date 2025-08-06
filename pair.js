@@ -1,11 +1,7 @@
-const PastebinAPI = require('pastebin-js');
-const pastebin = new PastebinAPI('EMWTMkQAVfJa9kM-MRUrxd5Oku1U7pgL');
-const { ByteID } = require('./id');
 const express = require('express');
 const fs = require('fs');
 const pino = require("pino");
-let router = express.Router();
-
+const { ByteID } = require('./id');
 const {
     default: Byte,
     useMultiFileAuthState,
@@ -14,6 +10,8 @@ const {
     Browsers
 } = require("maher-zubair-baileys");
 
+const router = express.Router();
+
 function removeFile(FilePath) {
     if (!fs.existsSync(FilePath)) return false;
     fs.rmSync(FilePath, { recursive: true, force: true });
@@ -21,27 +19,27 @@ function removeFile(FilePath) {
 
 router.get('/', async (req, res) => {
     const id = ByteID();
-    let num = req.query.number;
-
-    if (!num) return res.status(400).send({ error: "Number is required" });
-
-    num = num.replace(/[^0-9]/g, '');
-    if (!num.startsWith("91")) {
-        num = "91" + num; // Indian number defaulting, modify if needed
-    }
-
+    let num = req.query.number || "";
     let attempt = 0;
+
+    // ✅ Sanitize number
+    num = num.replace(/[^0-9]/g, '');
+    if (!num.startsWith("91")) num = "91" + num; // default to Indian country code
+
+    if (!num || num.length < 10) {
+        return res.send({ error: "Invalid number" });
+    }
 
     async function Byte_Pair() {
         const { state, saveCreds } = await useMultiFileAuthState('./temp/' + id);
         try {
-            let Hamza = Byte({
+            const Hamza = Byte({
                 auth: {
                     creds: state.creds,
-                    keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" })),
+                    keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })),
                 },
                 printQRInTerminal: false,
-                logger: pino({ level: "fatal" }).child({ level: "fatal" }),
+                logger: pino({ level: "fatal" }),
                 browser: Browsers.macOS("Desktop")
             });
 
@@ -56,7 +54,6 @@ router.get('/', async (req, res) => {
 
                     let data = fs.readFileSync(__dirname + `/temp/${id}/creds.json`);
                     let b64data = Buffer.from(data).toString('base64');
-
                     let session = await Hamza.sendMessage(Hamza.user.id, { text: 'Byte;;;' + b64data });
                     await delay(8000);
 
@@ -69,13 +66,15 @@ router.get('/', async (req, res) => {
                 else if (connection === "close" && lastDisconnect?.error?.output?.statusCode !== 401) {
                     if (attempt < 1) {
                         attempt++;
-                        console.log("Retrying Byte_Pair...");
+                        console.log("Retrying connection...");
                         await delay(10000);
-                        return await Byte_Pair(); // <- Added return here
+                        return await Byte_Pair();
                     } else {
-                        console.log("Max retries reached");
+                        console.log("Max retry reached.");
                         removeFile('./temp/' + id);
-                        if (!res.headersSent) return res.send({ code: "Service Unavailable" });
+                        if (!res.headersSent) {
+                            return res.send({ code: "Service Unavailable" });
+                        }
                     }
                 }
             });
@@ -83,18 +82,22 @@ router.get('/', async (req, res) => {
             if (!Hamza.authState.creds.registered) {
                 await delay(1500);
                 const code = await Hamza.requestPairingCode(num);
+                console.log("Pairing code generated for:", num, "→", code);
 
-                if (!res.headersSent && code) {
-                    return res.send({ code });
-                } else {
-                    return res.send({ error: "Failed to generate pairing code" });
+                if (!res.headersSent) {
+                    return res.send({
+                        code: code,
+                        message: "Use this code in WhatsApp within 1 minute."
+                    });
                 }
             }
 
         } catch (err) {
-            console.log("Service Error:", err);
+            console.error("Service Error:", err);
             removeFile('./temp/' + id);
-            if (!res.headersSent) return res.send({ code: "Service Unavailable" });
+            if (!res.headersSent) {
+                return res.send({ code: "Service Unavailable" });
+            }
         }
     }
 
